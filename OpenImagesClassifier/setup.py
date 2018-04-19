@@ -44,6 +44,7 @@ def create_tables(conn):
         c.execute('''CREATE TABLE Dict (
                       LabelName VARCHAR,
                       DisplayLabelName VARCHAR,
+                      ClassNumber INT,
                       PRIMARY KEY (LabelName)
                   )''')
 
@@ -158,6 +159,9 @@ def clean_up_database(conn, category_list):
     sql = "DELETE FROM Dict WHERE DisplayLabelName NOT IN ({seq})".format(
         seq=','.join(['?'] * len(category_list)))
     cursor.execute(sql, category_list)
+    for i, category in enumerate(category_list):
+        cursor.execute("""UPDATE Dict SET ClassNumber = ? WHERE DisplayLabelName = ?""", (i, category))
+
     cursor.execute("""DELETE FROM Images WHERE ImageID NOT IN (SELECT * FROM SelectedImages)""")
 
     cursor.execute("""DELETE FROM Labels WHERE ImageID NOT IN (SELECT * FROM SelectedImages)

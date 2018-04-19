@@ -1,1 +1,5 @@
 OpenImagesClassifier/data/
+OpenImagesClassifier/log/
+OpenImagesClassifier/models/
+.idea/
+OpenImagesClassifier/__pycache__/

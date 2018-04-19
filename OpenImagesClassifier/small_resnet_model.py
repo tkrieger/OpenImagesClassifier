@@ -26,25 +26,26 @@ def residual_unit(input, filters_num, kernel_size, training, name):
         kernel_size: size of convolution kernel
         training: Indicator for usage while training
         name: name for layer"""
-    shortcut = input
-    first_layer_stride = 1
-    # if number of filters is doubled the size of the image representation is halved, shortcut have to be projected
-    if tf.shape(shortcut)[-1] != filters_num:
-        shortcut = tf.layers.conv2d(input, filters=filters_num, kernel_size=1, strides=2, padding='SAME')
-        first_layer_stride = 2
+    with tf.name_scope(name):
+        shortcut = input
+        first_layer_stride = 1
+        # if number of filters is doubled the size of the image representation is halved, shortcut have to be projected
+        if int(shortcut.get_shape()[-1]) != filters_num:
+            shortcut = tf.layers.conv2d(input, filters=filters_num, kernel_size=1, strides=2, padding='SAME')
+            first_layer_stride = 2
 
-    conv_1 = tf.layers.conv2d(input, filters=filters_num, kernel_size=kernel_size, padding='SAME',
-                              strides=first_layer_stride, use_bias=False)
-    bn_1 = batch_norm(conv_1, training)
-    relu_1 = tf.nn.relu(bn_1)
+        conv_1 = tf.layers.conv2d(input, filters=filters_num, kernel_size=kernel_size, padding='SAME',
+                                  strides=first_layer_stride, use_bias=False)
+        bn_1 = batch_norm(conv_1, training)
+        relu_1 = tf.nn.relu(bn_1)
 
-    conv_2 = tf.layers.conv2d(relu_1, filters=filters_num, kernel_size=kernel_size, padding='SAME',
-                              use_bias=False)
-    bn_2 = batch_norm(conv_2, training)
-    residual = tf.add(input, bn_2)
+        conv_2 = tf.layers.conv2d(relu_1, filters=filters_num, kernel_size=kernel_size, padding='SAME',
+                                  use_bias=False)
+        bn_2 = batch_norm(conv_2, training)
+        residual = tf.add(shortcut, bn_2)
 
-    relu_2 = tf.nn.relu(residual)
-    return tf.identity(relu_2, name=name)
+        relu_2 = tf.nn.relu(residual)
+        return tf.identity(relu_2, name=name)
 
 
 def build_small_resnet(input, classes_count, training):

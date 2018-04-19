@@ -3,6 +3,9 @@
 
 DATA_DIRECTORY = './data/'
 
+SUMMARY_DIR = './log'
+MODEL_SAVE_DIR = "./models"
+
 THREAD_COUNT = 10
 
 DATABASE = {
