@@ -31,7 +31,8 @@ def residual_unit(input, filters_num, kernel_size, training, name):
         first_layer_stride = 1
         # if number of filters is doubled the size of the image representation is halved, shortcut have to be projected
         if int(shortcut.get_shape()[-1]) != filters_num:
-            shortcut = tf.layers.conv2d(input, filters=filters_num, kernel_size=1, strides=2, padding='SAME')
+            transform_conv = tf.layers.conv2d(input, filters=filters_num, kernel_size=1, strides=2, padding='SAME')
+            shortcut = batch_norm(transform_conv, training)
             first_layer_stride = 2
 
         conv_1 = tf.layers.conv2d(input, filters=filters_num, kernel_size=kernel_size, padding='SAME',
@@ -59,9 +60,11 @@ def build_small_resnet(input, classes_count, training):
         # input size 224x224x3
         # output size 112x112x32
         first_conv = tf.layers.conv2d(input, filters=32, kernel_size=7, padding='SAME', strides=2, name="First_Conv")
+        first_bn = batch_norm(first_conv, training)
+        first_relu = tf.nn.relu(first_bn)
 
         # output size 56x56x32
-        max_pool = tf.layers.max_pooling2d(first_conv, pool_size=3, strides=2, padding='SAME', name="Max_Pooling")
+        max_pool = tf.layers.max_pooling2d(first_relu, pool_size=3, strides=2, padding='SAME', name="Max_Pooling")
 
         # output size 56x56x32
         res_unit_1 = residual_unit(max_pool, filters_num=32, kernel_size=3, training=training, name="ResUnit_1")
