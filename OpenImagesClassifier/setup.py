@@ -1,21 +1,18 @@
 """ Setup script for OpenImagesClassifier
     Compose DataSet according to chosen classes.
 """
+from OpenImagesClassifier import config
 
 import sqlite3
 import urllib.request
-
 import pandas
 import os.path
-
 import multiprocessing
 import tqdm
 import wget
 import tarfile
 import shutil
 import time
-
-from OpenImagesClassifier import config
 
 
 def create_tables(conn):

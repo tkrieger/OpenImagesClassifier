@@ -4,12 +4,13 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+from OpenImagesClassifier import small_resnet_model as rs
+from OpenImagesClassifier import config
+
 import tensorflow as tf
 import sqlite3
 import os
 import numpy as np
-from OpenImagesClassifier import small_resnet_model as rs
-from OpenImagesClassifier import config
 
 # only for prototyping
 import cv2
@@ -51,10 +52,12 @@ def trainable_network(X, y):
     training_op = optimizer.minimize(loss)
     return training_op, tf.summary.merge_all()
 
+
 def inference_network(X):
     logits = rs.build_small_resnet(X, 10, False)
     softmax = tf.nn.softmax(logits)
     return softmax
+
 
 def train():
     time_1 = time.time()

@@ -1,17 +1,17 @@
 """ Input Queue and static image preprocessing for classification algorithm"""
 
-## UINT to FLOAT cast!!!!!
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import tensorflow as tf
-import pandas as pd
-import sqlite3
-import os
-
 from OpenImagesClassifier import config
 from PIL import Image
+
+import tensorflow as tf
+import pandas as pd
+import numpy as np
+import sqlite3
+import os
 
 
 def _int64_feature(value):
@@ -86,7 +86,7 @@ def preprocess(subset):
                                'data': _bytes_feature(tf.compat.as_bytes(image.tostring()))
                                }
                     example = tf.train.Example(features=tf.train.Features(feature=feature))
-                    
+
                     # write record to .tfrecords file
                     writer.write(example.SerializeToString())
 
@@ -109,8 +109,7 @@ def preprocess_all_sets():
 
 def test_preprocessing(subset):
     """Only for testing functionality, used during development"""
-    directory = config.DATA_DIRECTORY + 'ImagesRaw'
-    tfrecords_filename = directory + '/' + subset + '.tfrecords'
+    tfrecords_filename = build_tfrecords_path(subset)
 
     dataset = tf.data.TFRecordDataset([tfrecords_filename])
     dataset = dataset.map(parse_record)
@@ -120,11 +119,19 @@ def test_preprocessing(subset):
         for _ in range(512):
             try:
                 image, meta = sess.run(next_element)
+                directory = config.DATA_DIRECTORY + 'ImagesRaw'
                 pil_image = Image.fromarray(image)
                 pil_image.save(directory + '/' + meta[0].decode('utf-8') + '.bmp')
                 print(meta)
             except tf.errors.OutOfRangeError:
                 break
+
+
+def build_tfrecords_path(subset):
+    directory = config.DATA_DIRECTORY + 'ImagesRaw'
+    tfrecords_path = directory + '/' + subset + '.tfrecords'
+    os.path.abspath(tfrecords_path)
+    return tfrecords_path
 
 
 def parse_record(record):
@@ -143,7 +150,62 @@ def parse_record(record):
     image = tf.reshape(image, (256, 256, 3))
     return image, (parsed['ImageID'], parsed['Label'], parsed['Display_Label'], parsed['Label_Class'])
 
+def parse_to_float(image, metadata):
+    """Parses image from uint [0,255] to float [0,1]. Used as map function"""
+    return tf.image.convert_image_dtype(image, tf.float32), metadata
+
+
+def data_augmentation(image, metadata):
+    """Map function for data augmentation"""
+    # TODO implement augmentation
+    return image, metadata
+
+
+def create_dataset_for_file_list(file_list):
+    """Creates dataset for supplied file list"""
+    file_list = np.array(file_list)
+    dataset = tf.data.Dataset.from_tensor_slices(file_list)
+    dataset = dataset.map(preprocess_image)
+    return dataset
+
+
+def build_dataset(subset, batch_size):
+    """Creates dataset for supplied subset, enables shuffling and set batch size as supplied"""
+    dataset = tf.data.TFRecordDataset([build_tfrecords_path(subset)]) \
+                    .map(parse_record) \
+                    .map(parse_to_float) \
+                    .shuffle(buffer_size=2000) \
+                    .batch(batch_size) \
+                    .repeat()
+    return dataset
+
+
+def create_reinitializable_iterator(batch_size):
+    """Creates reinitializable iterator, with initialization operation (init op) for every dataset.
+        This allows to change dataset without reloading the model.
+        Args:
+            - batch_size: number of elements per iterator call
+        Returns:
+            - next_element: nested structure for dataset elements (image, metadata) -> ops used for model input
+            - init_ops: dictionary with keys 'train', 'validation', 'test' contains the init ops for each dataset"""
+
+    train_dataset = build_dataset('train', batch_size)
+    train_dataset = train_dataset.map(data_augmentation)
+    validation_dataset = build_dataset('validation', batch_size)
+    test_dataset = build_dataset('test', batch_size)
+
+    iterator = tf.data.Iterator.from_structure(train_dataset.output_types, train_dataset.output_shapes)
+
+    next_element = iterator.get_next()
+    train_init_op = iterator.make_initializer(train_dataset)
+    validation_init_op = iterator.make_initializer(validation_dataset)
+    test_init_op = iterator.make_initializer(test_dataset)
+
+    init_ops = {'train': train_init_op,
+                'validation': validation_init_op,
+                'test': test_init_op}
+    return next_element, init_ops
+
 
 if __name__ == '__main__':
-    preprocess('train')
-    test_preprocessing('train')
+    preprocess_all_sets()
