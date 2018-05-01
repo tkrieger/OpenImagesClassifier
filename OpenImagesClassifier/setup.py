@@ -33,6 +33,8 @@ def create_tables(conn):
                       OriginalSize BIGINT,
                       OriginalMD5 VARCHAR,
                       Thumbnail300KURL VARCHAR,
+                      PathJPEG VARCHAR, 
+                      PathBMP VARCHAR,
                       PRIMARY KEY(ImageID)
                     )''')
 
@@ -241,14 +243,32 @@ def download_image(image_row):
     return 0
 
 
+def add_paths_to_table():
+    with sqlite3.connect(config.DATABASE['filename']) as conn:
+        c = conn.cursor()
+        result = c.execute("""SELECT I.ImageID, I.Subset, D.DisplayLabelName, D.ClassNumber FROM Images I
+                              INNER JOIN Labels L ON I.ImageID = L.ImageID
+                              INNER JOIN Dict D ON L.LabelName = D.LabelName""")
+
+        for i, row in enumerate(result.fetchall()):
+            path = config.DATA_DIRECTORY + "/Images/{}/{}/{}.{}".format(row[2], row[1], row[0], "jpg")
+            if os.path.exists(path):
+                abs_path = os.path.abspath(path)
+                c.execute("""UPDATE Images SET PathJPEG = ? WHERE ImageID = ?""", (abs_path, row[0]))
+
+        c.execute("""DELETE FROM Images WHERE PathJPEG IS NULL""")
+        conn.commit()
+
+
 def setup():
     download_files()
     build_database()
     shutil.rmtree(config.DATA_DIRECTORY + "/2017_11")
     produce_subset()
     download_all()
+    add_paths_to_table()
 
 
 if __name__ == '__main__':
-    setup()
+    add_paths_to_table()
 

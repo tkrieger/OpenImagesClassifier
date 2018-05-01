@@ -1,4 +1,4 @@
-"""Runtime for small ResNet Model"""
+"""Prototype Runtime for Small ResNet Model"""
 
 from __future__ import absolute_import
 from __future__ import division
@@ -13,6 +13,7 @@ from OpenImagesClassifier import config
 
 # only for prototyping
 import cv2
+import time
 
 def select_random_from_db(count, subset):
     X = np.zeros([count, 224, 224, 3]) # only prototype no data augmentation here
@@ -56,6 +57,7 @@ def inference_network(X):
     return softmax
 
 def train():
+    time_1 = time.time()
     X_batch, y_batch = select_random_from_db(256, 'train')
     X = tf.placeholder(tf.float32, shape=(None, 224, 224, 3), name='X')
     y = tf.placeholder(tf.int32, shape=(None), name='y')
@@ -63,6 +65,7 @@ def train():
     train_op, merged = trainable_network(X, y)
 
     with tf.Session() as sess:
+
         train_writer = tf.summary.FileWriter(config.SUMMARY_DIR + '/train', sess.graph)
         run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
         run_metadata = tf.RunMetadata()
@@ -83,6 +86,9 @@ def train():
         train_writer.add_run_metadata(run_metadata, tag='runtime-test')
         train_writer.add_summary(summary)
         train_writer.flush()
+
+        delta_time = time.time() - time_1
+        print("Delta Time:", delta_time)
 
 
 def predict():
@@ -105,5 +111,5 @@ def predict():
         print(predictions)
 
 if __name__ == '__main__':
-    predict()
+    train()
 
