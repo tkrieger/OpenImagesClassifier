@@ -28,13 +28,21 @@ def preprocess_image(filename, image_id, label, label_display, label_class):
     """Reads image and scales down to 256x256. As mapping function for tf.data.Dataset used."""
     image_encoded = tf.read_file(filename)
     image = tf.image.decode_jpeg(image_encoded)
-
+    image = tf.cond(tf.size(image) < 3*256*256, lambda: tf.image.grayscale_to_rgb(image), lambda: image)
     image_resized = tf.image.resize_images(image, [256, 256], align_corners=True)
     # for performance during training it would be great to save the image as float32,
     # but this increases the dataset size 4 times!
     image = tf.cast(image_resized, dtype=tf.uint8)
     return image, (image_id, label, label_display, label_class)
 
+
+def load_and_scale_image_ops(filename_placeholder):
+    image_encoded = tf.read_file(filename_placeholder)
+    image = tf.image.decode_jpeg(image_encoded)
+    image = tf.cond(tf.size(image) < 3 * 256 * 256, lambda: tf.image.grayscale_to_rgb(image), lambda: image)
+    image = tf.image.convert_image_dtype(image, tf.float32)
+    image_resized = tf.image.resize_images(image, [224, 224], align_corners=True)
+    return tf.reshape(image_resized, shape=[1, 224, 224, 3])
 
 def preprocess(subset):
     """Reads all jpeg images, scales them down to 256 x 256 and saves them to one .tfrecords file.
@@ -53,7 +61,7 @@ def preprocess(subset):
                               INNER JOIN Dict D ON L.LabelName = D.LabelName 
                               WHERE Subset = ?
                               ORDER BY random()
-                              """, (subset,))
+                              LIMIT 512""", (subset,))
 
         # list of paths for all images in train dataset
         df = pd.DataFrame(result.fetchall(), columns=['ImageID', 'Path', 'Label', 'Display_Label', 'LabelClass'])
@@ -180,7 +188,7 @@ def create_dataset_for_file_list(file_list):
 def build_dataset(subset, batch_size):
     """Creates dataset for supplied subset, enables shuffling and set batch size as supplied"""
     dataset = tf.data.TFRecordDataset([build_tfrecords_path(subset)]) \
-                     .map(parse_record)
+        .map(parse_record)
 
     if subset == 'train':
         dataset = dataset.map(parse_train)
@@ -188,17 +196,21 @@ def build_dataset(subset, batch_size):
         dataset = dataset.map(parse_test)
 
     dataset = dataset.shuffle(buffer_size=2000) \
-                     .batch(batch_size) \
-                     .repeat()
+        .batch(batch_size) \
+        .repeat()
     return dataset
 
 
-def parse_filename(filename):
-    return preprocess_image(filename, tf.constant('', dtype=tf.string), tf.constant('', dtype=tf.string),
-                            tf.constant('', dtype=tf.string), tf.constant(0, dtype=tf.int64))
+def make_saveable_iterator(dataset, session):
+    iterator = dataset.make_one_shot_iterator()
+    # saveable = tf.contrib.data.make_saveable_from_iterator(iterator)
+    # tf.add_to_collection(tf.GraphKeys.SAVEABLE_OBJECTS, saveable)
+
+    handle = session.run(iterator.string_handle())
+    return handle
 
 
-def create_reinitializable_iterator(batch_size):
+def build_datasets_and_iterators(batch_size, session):
     """Creates reinitializable iterator, with initialization operation (init op) for every dataset.
         This allows to change dataset without reloading the model.
         Args:
@@ -210,27 +222,15 @@ def create_reinitializable_iterator(batch_size):
     train_dataset = build_dataset('train', batch_size)
     validation_dataset = build_dataset('validation', batch_size)
     test_dataset = build_dataset('test', batch_size)
-    # prediction_placeholder = tf.placeholder(tf.string, name='prediction_input', shape=[None])
-    # prediction_dataset = tf.data.Dataset.from_tensor_slices(prediction_placeholder)\
-    #                                     .map(parse_filename)\
-    #                                     .map(parse_test).batch(1)
 
-    iterator = tf.data.Iterator.from_structure(train_dataset.output_types, train_dataset.output_shapes)
-    # iterator is saveable -> input pipline reconstruction after restart
-    saveable = tf.contrib.data.make_saveable_from_iterator(iterator)
-    tf.add_to_collection(tf.GraphKeys.SAVEABLE_OBJECTS, saveable)
-
+    handle = tf.placeholder(tf.string, shape=[])
+    iterator = tf.data.Iterator.from_string_handle(handle, train_dataset.output_types, train_dataset.output_shapes)
     next_element = iterator.get_next()
-    train_init_op = iterator.make_initializer(train_dataset)
-    validation_init_op = iterator.make_initializer(validation_dataset)
-    test_init_op = iterator.make_initializer(test_dataset)
-    # prediction_init_op = iterator.make_initializer(prediction_dataset)
 
-    data_ops = {'train': train_init_op,
-                'validation': validation_init_op,
-                'test': test_init_op}
-                #'prediction': prediction_init_op}
-    return next_element, data_ops
+    handle_strings = {'train': make_saveable_iterator(train_dataset, session),
+                      'validation': make_saveable_iterator(validation_dataset, session),
+                      'test': make_saveable_iterator(test_dataset, session)}
+    return next_element, handle, handle_strings
 
 
 if __name__ == '__main__':

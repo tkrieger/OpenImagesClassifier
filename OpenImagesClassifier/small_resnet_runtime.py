@@ -32,6 +32,7 @@ class ImageClassifier:
 
         self.training = tf.placeholder(tf.bool, name='training')
         self.logits = None
+        self.current_handle_string = None
 
         if model_type == ModelType.SMALL_RESNET:
             self._init_small_resnet()
@@ -72,7 +73,6 @@ class ImageClassifier:
         # saver for model
         self.saver = tf.train.Saver()
 
-        self.sess = tf.Session()
         tf.global_variables_initializer().run(session=self.sess)
         tf.local_variables_initializer().run(session=self.sess)
         self.restore_model()
@@ -96,6 +96,7 @@ class ImageClassifier:
 
     def _init_basics(self, batch_size, model_path, model_type):
         """Initializes all object attributes that represent basic object state"""
+        self.sess = tf.Session()
         with tf.variable_scope("counter", reuse=tf.AUTO_REUSE):
             self.counter = tf.get_variable('overall_training_cycles', shape=(), dtype=tf.int32,
                                            trainable=False, initializer=tf.constant_initializer(0))
@@ -106,10 +107,12 @@ class ImageClassifier:
 
     def _init_data_pipeline(self, batch_size):
         """Initializes all object attributes that belongs to data input pipeline"""
-        input_ops, self.data_ops = data.create_reinitializable_iterator(batch_size)
-        self.X = input_ops[0]
-        self.y = input_ops[1][3]
-        self.display_label = input_ops[1][2]
+        input_ops, self.handle, self.iterator_handle_strings = data.build_datasets_and_iterators(batch_size, self.sess)
+        self.X = tf.placeholder_with_default(input_ops[0], shape=[None, 224, 224, 3], name="X_input")
+        self.y = tf.placeholder_with_default(input_ops[1][3], shape=[None], name="y_label")
+
+        self.prediction_filename_placeholder = tf.placeholder(tf.string, shape=(), name="prediction_filename")
+        self.scale_image = data.load_and_scale_image_ops(self.prediction_filename_placeholder)
 
     class InferenceType(Enum):
         VALIDATION = 1
@@ -132,12 +135,11 @@ class ImageClassifier:
             print("Loaded saved Model")
 
     def save_model(self):
-        self.saver.save(self.sess, self.model_path + '/small_resnet.ckpt')
+        self.saver.save(self.sess, self.model_path + '/model.ckpt')
 
     def train(self, cycles):
         # enable train dataset
-        self.sess.run([self.data_ops['train']])
-
+        self.current_handle_string = self.iterator_handle_strings['train']
         training_hist = []
 
         for i in range(cycles):
@@ -146,7 +148,8 @@ class ImageClassifier:
             # run training and update metric - update op also returns metric results
             summary, _, res, overall_cycle = self.sess.run([self.merged_summaries, self.training_op,
                                                             self.metrics.update_ops, self.add_train_cycle],
-                                                           feed_dict={self.training: True})
+                                                           feed_dict={self.training: True,
+                                                                      self.handle: self.current_handle_string})
             training_hist.append({'overall_cycle': overall_cycle, 'top_1_acc': res[0]})
             self.train_writer.add_summary(summary, global_step=overall_cycle)
 
@@ -161,7 +164,7 @@ class ImageClassifier:
             If aggregated is True the metrics are aggregated overall cycles
             -> For testing and validation the same actions are needed, only difference is the dataset
             -> summary writing only when aggregated=False"""
-        self.sess.run([self.data_ops['validation']])
+        self.current_handle_string = self.iterator_handle_strings['validation']
         self.inference_type = self.InferenceType.VALIDATION
         # _metrics_run processes the validation it self
         return self._metrics_run(number_of_batches, aggregated, write_summary)
@@ -171,7 +174,7 @@ class ImageClassifier:
             If aggregated is True the metrics are aggregated overall cycles
             -> For testing and validation the same actions are needed, only difference is the dataset
             -> summary writing only when aggregated=False"""
-        self.sess.run([self.data_ops['test']])
+        self.current_handle_string = self.iterator_handle_strings['test']
         self.inference_type = self.InferenceType.TEST
         # _metrics_run processes the testing it self
         return self._metrics_run(number_of_batches, aggregated, write_summary)
@@ -179,13 +182,13 @@ class ImageClassifier:
     def predict(self, file_list):
         """Predicts classes for images given as filenames/path
             returns: dict with filename and predictions"""
-        # dataset is constructed from placeholder that gets filled with file_list
-        placeholder = tf.get_default_graph().get_tensor_by_name('prediction_input:0')
-        self.sess.run([self.data_ops['prediction']], feed_dict={placeholder: file_list})
         result = []
 
         for file_name in file_list:
-            prediction = self.sess.run([self.softmax], feed_dict={self.training: False})
+            image = self.sess.run(self.scale_image, feed_dict={self.prediction_filename_placeholder: file_name})
+            prediction = self.sess.run([self.softmax], feed_dict={self.X: image,
+                                                                  self.training: False,
+                                                                  self.handle: self.current_handle_string})
             result.append({'file_name': file_name, 'prediction': prediction})
 
         return result
@@ -193,7 +196,6 @@ class ImageClassifier:
     def _metrics_run(self, number_of_batches, aggregated, write_summary):
         """triggers metrics run
             -> summary writing only when aggregated=False"""
-
         if aggregated:
             # metrics run with results aggregated overall batches
             if write_summary:
@@ -211,7 +213,7 @@ class ImageClassifier:
             self.sess.run(self.metrics.reset)
             # update metrics => run network to predict
             results, summary = self.sess.run([self.metrics.update_ops, self.merged_summaries],
-                                             feed_dict={self.training: False})
+                                             feed_dict={self.training: False, self.handle: self.current_handle_string})
 
             result_dict = {}
             for j, key in enumerate(self.metrics.names):
@@ -231,7 +233,8 @@ class ImageClassifier:
 
         for i in range(number_of_batches):
             # run metric updates -> run network to predict
-            self.sess.run(self.metrics.update_ops, feed_dict={self.training: False})
+            self.sess.run(self.metrics.update_ops, feed_dict={self.training: False,
+                                                              self.handle: self.current_handle_string})
 
         # get results from metrics once
         results = self.sess.run(self.metrics.value_ops)
@@ -279,6 +282,7 @@ def testing_2():
     results_aggregated = model.validate(number_of_batches=2, aggregated=True)
     print(results_single)
     print(results_aggregated)
+    model.train(cycles=5)
 
 
 def test_both():
@@ -301,7 +305,7 @@ def test_model(model):
     test_acc = model.test(number_of_batches=1)
     time_pred = time.time()
     files = ['C:/Users/D065030/Documents/dev/Studienarbeit/OpenImagesClassifier/OpenImagesClassifier'
-             '/data/Images/Car/train/000cfa102510c0f1.jpg',
+             '/data/Images/Person/train/000bc1eb7f74adae.jpg',
              'C:/Users/D065030/Documents/dev/Studienarbeit/OpenImagesClassifier/OpenImagesClassifier'
              '/data/Images/Car/train/000efa99e67d6f0c.jpg']
     predictions = model.predict(files)
@@ -313,7 +317,7 @@ def test_model(model):
     print("-Times-------------")
     print('Train:', time_valid - time_train)
     print('Valid:', time_test - time_valid)
-    print('Test:', time_pred - time_valid)
+    print('Test:', time_pred - time_test)
     print('Pred:', time_end - time_pred)
     print('Overall', time_end - time_train)
     print("-------------------------------------")

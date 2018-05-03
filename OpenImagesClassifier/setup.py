@@ -257,7 +257,18 @@ def add_paths_to_table():
         conn.commit()
 
 
+def mk_config_dirs():
+    mkdirs(config.SUMMARY_DIR)
+    mkdirs(config.MODEL_SAVE_DIR)
+    mkdirs(config.DATA_DIRECTORY)
+
+
+def mkdirs(directory):
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
 def setup():
+    mk_config_dirs()
     download_files()
     build_database()
     shutil.rmtree(config.DATA_DIRECTORY + "/2017_11")
@@ -266,6 +277,7 @@ def setup():
     add_paths_to_table()
 
 
+
 if __name__ == '__main__':
-    add_paths_to_table()
+
 

@@ -32,7 +32,7 @@ def select_random_from_db(count, subset):
             path = config.DATA_DIRECTORY + "/Images/{}/{}/{}.{}".format(row[1], subset, row[0], "jpg")
             if os.path.exists(path):
                 image = cv2.imread(path)
-                resized = cv2.resize(image, dsize=(224,224))
+                resized = cv2.resize(image, dsize=(224, 224))
                 resized = resized.astype(float)
                 X[i] = resized / 255.0
                 y[i] = row[2]
