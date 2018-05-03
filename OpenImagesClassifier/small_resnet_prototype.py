@@ -50,7 +50,7 @@ def trainable_network(X, y):
 
     optimizer = tf.train.AdamOptimizer()
     training_op = optimizer.minimize(loss)
-    return training_op, tf.summary.merge_all()
+    return training_op, tf.summary.merge_all(), logits
 
 
 def inference_network(X):
@@ -65,7 +65,7 @@ def train():
     X = tf.placeholder(tf.float32, shape=(None, 224, 224, 3), name='X')
     y = tf.placeholder(tf.int32, shape=(None), name='y')
 
-    train_op, merged = trainable_network(X, y)
+    train_op, merged, logits = trainable_network(X, y)
 
     with tf.Session() as sess:
 

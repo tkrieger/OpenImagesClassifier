@@ -51,7 +51,8 @@ def preprocess(subset):
                               FROM Images I
                               INNER JOIN Labels L ON I.ImageID = L.ImageID
                               INNER JOIN Dict D ON L.LabelName = D.LabelName 
-                              WHERE Subset = ?""", (subset,))
+                              WHERE Subset = ?
+                              ORDER BY random()""", (subset,))
 
         # list of paths for all images in train dataset
         df = pd.DataFrame(result.fetchall(), columns=['ImageID', 'Path', 'Label', 'Display_Label', 'LabelClass'])
@@ -150,14 +151,20 @@ def parse_record(record):
     image = tf.reshape(image, (256, 256, 3))
     return image, (parsed['ImageID'], parsed['Label'], parsed['Display_Label'], parsed['Label_Class'])
 
-def parse_to_float(image, metadata):
+
+def parse_test(image, metadata):
     """Parses image from uint [0,255] to float [0,1]. Used as map function"""
-    return tf.image.convert_image_dtype(image, tf.float32), metadata
+    image = tf.image.convert_image_dtype(image, tf.float32)
+    image = tf.image.resize_images(image, [224, 224], align_corners=True)
+
+    return image, metadata
 
 
-def data_augmentation(image, metadata):
+def parse_train(image, metadata):
     """Map function for data augmentation"""
-    # TODO implement augmentation
+    image = tf.image.convert_image_dtype(image, tf.float32)
+    image = tf.image.resize_images(image, [224, 224], align_corners=True)
+    # todo data augmentation
     return image, metadata
 
 
@@ -172,11 +179,16 @@ def create_dataset_for_file_list(file_list):
 def build_dataset(subset, batch_size):
     """Creates dataset for supplied subset, enables shuffling and set batch size as supplied"""
     dataset = tf.data.TFRecordDataset([build_tfrecords_path(subset)]) \
-                    .map(parse_record) \
-                    .map(parse_to_float) \
-                    .shuffle(buffer_size=2000) \
-                    .batch(batch_size) \
-                    .repeat()
+                     .map(parse_record)
+
+    if subset == 'train':
+        dataset = dataset.map(parse_train)
+    else:
+        dataset = dataset.map(parse_test)
+
+    dataset = dataset.shuffle(buffer_size=2000) \
+                     .batch(batch_size) \
+                     .repeat()
     return dataset
 
 
@@ -190,11 +202,13 @@ def create_reinitializable_iterator(batch_size):
             - init_ops: dictionary with keys 'train', 'validation', 'test' contains the init ops for each dataset"""
 
     train_dataset = build_dataset('train', batch_size)
-    train_dataset = train_dataset.map(data_augmentation)
     validation_dataset = build_dataset('validation', batch_size)
     test_dataset = build_dataset('test', batch_size)
 
     iterator = tf.data.Iterator.from_structure(train_dataset.output_types, train_dataset.output_shapes)
+    # iterator is saveable -> input pipline reconstruction after restart
+    saveable = tf.contrib.data.make_saveable_from_iterator(iterator)
+    tf.add_to_collection(tf.GraphKeys.SAVEABLE_OBJECTS, saveable)
 
     next_element = iterator.get_next()
     train_init_op = iterator.make_initializer(train_dataset)
