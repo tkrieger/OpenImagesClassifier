@@ -52,7 +52,8 @@ def preprocess(subset):
                               INNER JOIN Labels L ON I.ImageID = L.ImageID
                               INNER JOIN Dict D ON L.LabelName = D.LabelName 
                               WHERE Subset = ?
-                              ORDER BY random()""", (subset,))
+                              ORDER BY random()
+                              """, (subset,))
 
         # list of paths for all images in train dataset
         df = pd.DataFrame(result.fetchall(), columns=['ImageID', 'Path', 'Label', 'Display_Label', 'LabelClass'])
@@ -192,6 +193,11 @@ def build_dataset(subset, batch_size):
     return dataset
 
 
+def parse_filename(filename):
+    return preprocess_image(filename, tf.constant('', dtype=tf.string), tf.constant('', dtype=tf.string),
+                            tf.constant('', dtype=tf.string), tf.constant(0, dtype=tf.int64))
+
+
 def create_reinitializable_iterator(batch_size):
     """Creates reinitializable iterator, with initialization operation (init op) for every dataset.
         This allows to change dataset without reloading the model.
@@ -204,6 +210,10 @@ def create_reinitializable_iterator(batch_size):
     train_dataset = build_dataset('train', batch_size)
     validation_dataset = build_dataset('validation', batch_size)
     test_dataset = build_dataset('test', batch_size)
+    # prediction_placeholder = tf.placeholder(tf.string, name='prediction_input', shape=[None])
+    # prediction_dataset = tf.data.Dataset.from_tensor_slices(prediction_placeholder)\
+    #                                     .map(parse_filename)\
+    #                                     .map(parse_test).batch(1)
 
     iterator = tf.data.Iterator.from_structure(train_dataset.output_types, train_dataset.output_shapes)
     # iterator is saveable -> input pipline reconstruction after restart
@@ -214,11 +224,13 @@ def create_reinitializable_iterator(batch_size):
     train_init_op = iterator.make_initializer(train_dataset)
     validation_init_op = iterator.make_initializer(validation_dataset)
     test_init_op = iterator.make_initializer(test_dataset)
+    # prediction_init_op = iterator.make_initializer(prediction_dataset)
 
-    init_ops = {'train': train_init_op,
+    data_ops = {'train': train_init_op,
                 'validation': validation_init_op,
                 'test': test_init_op}
-    return next_element, init_ops
+                #'prediction': prediction_init_op}
+    return next_element, data_ops
 
 
 if __name__ == '__main__':

@@ -8,6 +8,9 @@ MODEL_SAVE_DIR = "./models"
 
 THREAD_COUNT = 10
 
+TRAINED_MODEL = {'name': 'ResNet_v1_50',
+                 'url': 'https://tfhub.dev/google/imagenet/resnet_v1_50/feature_vector/1'}
+
 DATABASE = {
     'filename': DATA_DIRECTORY + 'open_images.db'
 }

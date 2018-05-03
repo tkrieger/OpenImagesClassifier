@@ -10,83 +10,55 @@ from OpenImagesClassifier import small_resnet_model as rs
 from enum import Enum
 
 import tensorflow as tf
+import tensorflow_hub as hub
 import time
 
 
-class AbstractNetwork:
-    """Class that defines basic interface for using a model"""
-
-    def __init__(self, batch_size=256, model_path=config.MODEL_SAVE_DIR):
-        with tf.variable_scope("counter", reuse=tf.AUTO_REUSE):
-            self.counter = tf.get_variable('overall_training_cycles', shape=(), dtype=tf.int32,
-                                           trainable=False, initializer=tf.constant_initializer(0))
-            self.add_train_cycle = tf.assign_add(self.counter, 1)
-
-        self.batch_size = batch_size
-        input_ops, self.init_ops = data.create_reinitializable_iterator(batch_size)
-        self.X = input_ops[0]
-        self.y = input_ops[1][3]
-        self.display_label = input_ops[1][2]
-
-        # tf.summary.image('test', self.X)
-        self.sess = None
-        self.model_path = model_path
-
-    def train(self, cycles):
-        """Train Model, after each call the model is saved:
-            - cycles: number of training iterations (one batch per iteration)
-            returns: dictionary with training accuracy and validation acc
-            """
-        # maybe it is best to return a special return object that contains all relevant data / dict
-        return 0
-
-    def validate(self, number_of_batches=1, aggregated=True):
-        """Validates the model with validation dataset one batch
-            - cycles: number of iteration (per iteration one batch is processed)
-            returns: (mean) validation accuracy"""
-        return 0
-
-    def test(self, number_of_batches=None, aggregated=True):
-        """Tests the model with test dataset
-            - cycles: number of iteration (per iteration one batch is processed)
-            returns: (mean) test accuracy"""
-        return 0
-
-    def predict(self, file_list):
-        """Predicts classes for images given as filenames/path
-            returns: list of predicted classes, in order of file_list"""
-        return []
-
-    def __enter__(self):
-        return
-
-    def __exit__(self):
-        if self.sess is not None:
-            self.sess.close()
+class ModelType(Enum):
+    """Enum for network model types"""
+    SMALL_RESNET = 'SMALL_RESNET'
+    TRAINED_MODEL = 'TRAINED_MODEL'
 
 
-# USE IN WITH BLOCK!
+class ImageClassifier:
+    """Class for train, validate, test and predict with the classifier.
+        Multiple instances have to be used in exclusive graphs (as default graph)!"""
 
-class SmallResNet(AbstractNetwork):
-    """Implementation for Small ResNet Model"""
+    def __init__(self, model_type=ModelType.SMALL_RESNET, batch_size=256, model_path=config.MODEL_SAVE_DIR,
+                 summary_dir=config.SUMMARY_DIR):
 
-    def __init__(self, batch_size=256, model_path=config.MODEL_SAVE_DIR, summary_dir=config.SUMMARY_DIR):
-        super(SmallResNet, self).__init__(batch_size, model_path)
+        self._init_basics(batch_size, model_path, model_type)
+        self._init_data_pipeline(batch_size)
+
         self.training = tf.placeholder(tf.bool, name='training')
+        self.logits = None
+
+        if model_type == ModelType.SMALL_RESNET:
+            self._init_small_resnet()
+        if model_type == ModelType.TRAINED_MODEL:
+            self._init_trained_resnet()
+
+        self._init_training()
+        self._init_prediction()
+        self._init_runtime(summary_dir)
+
+    def _init_small_resnet(self):
+        """Used for initialization of small resnet model"""
         self.logits = rs.build_small_resnet(self.X, classes_count=len(config.CATEGORIES), training=self.training)
 
-        # add training ops
-        cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self.y, logits=self.logits)
-        loss = tf.reduce_mean(cross_entropy)
-        tf.summary.scalar('loss', loss)
-        optimizer = tf.train.AdamOptimizer()
-        self.training_op = optimizer.minimize(loss)
+    def _init_trained_resnet(self):
+        """Used for initialization of trained model"""
+        module = hub.Module(config.TRAINED_MODEL['url'])  # with trainable=True the model parameter are also trained
+        self.features = module(self.X)
 
-        # add ops for prediction
-        self.predictions = tf.nn.softmax(logits=self.logits)
+        # add a fully connected layer
+        self.logits = tf.layers.dense(inputs=self.features, units=len(config.CATEGORIES), name="Logits")
 
+    def _init_prediction(self):
+        """Adds all ops needed for prediction + metrics"""
+        self.softmax = tf.nn.softmax(logits=self.logits)
         # add metric object manages metrics and holds needed references
-        # todo test top metric, update and reset (one call for all!)
+        # todo add further metrics
         self.metrics = Metrics()
         self.metrics.append_metric('top_1_accuracy', tf.metrics.accuracy, labels=self.y,
                                    predictions=tf.argmax(self.logits, axis=1))
@@ -95,17 +67,18 @@ class SmallResNet(AbstractNetwork):
         self.metrics.append_metric('top_5_accuracy', tf.metrics.mean,
                                    values=tf.nn.in_top_k(self.logits, self.y, k=5))
 
-        # todo add further metrics
+    def _init_runtime(self, summary_dir):
+        """get model ready for runtime"""
         # saver for model
         self.saver = tf.train.Saver()
 
-        # session management
         self.sess = tf.Session()
         tf.global_variables_initializer().run(session=self.sess)
         tf.local_variables_initializer().run(session=self.sess)
         self.restore_model()
 
         self.merged_summaries = tf.summary.merge_all()
+        summary_dir = summary_dir + '/' + self.model_type.name
         self.train_writer = tf.summary.FileWriter(summary_dir + '/train')
         self.validation_writer = tf.summary.FileWriter(summary_dir + '/validation')
         self.test_writer = tf.summary.FileWriter(summary_dir + '/test')
@@ -113,15 +86,43 @@ class SmallResNet(AbstractNetwork):
 
         self.train_writer.add_graph(tf.get_default_graph())
 
+    def _init_training(self):
+        """Creates all ops needed for training"""
+        cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self.y, logits=self.logits)
+        loss = tf.reduce_mean(cross_entropy)
+        tf.summary.scalar('loss', loss)
+        optimizer = tf.train.AdamOptimizer()
+        self.training_op = optimizer.minimize(loss)
+
+    def _init_basics(self, batch_size, model_path, model_type):
+        """Initializes all object attributes that represent basic object state"""
+        with tf.variable_scope("counter", reuse=tf.AUTO_REUSE):
+            self.counter = tf.get_variable('overall_training_cycles', shape=(), dtype=tf.int32,
+                                           trainable=False, initializer=tf.constant_initializer(0))
+            self.add_train_cycle = tf.assign_add(self.counter, 1)
+        self.batch_size = batch_size
+        self.model_path = model_path + '/' + model_type.name
+        self.model_type = model_type
+
+    def _init_data_pipeline(self, batch_size):
+        """Initializes all object attributes that belongs to data input pipeline"""
+        input_ops, self.data_ops = data.create_reinitializable_iterator(batch_size)
+        self.X = input_ops[0]
+        self.y = input_ops[1][3]
+        self.display_label = input_ops[1][2]
+
     class InferenceType(Enum):
         VALIDATION = 1
         TEST = 2
 
-    def __exit__(self):
-        super(SmallResNet, self).__exit__()
+    def __exit__(self, *oth):
+        self.sess.close()
         self.train_writer.close()
         self.validation_writer.close()
         self.test_writer.close()
+
+    def __enter__(self):
+        return self
 
     def restore_model(self):
         checkpoint_path = tf.train.latest_checkpoint(self.model_path)
@@ -135,9 +136,8 @@ class SmallResNet(AbstractNetwork):
 
     def train(self, cycles):
         # enable train dataset
-        self.sess.run([self.init_ops['train']])
-        # get top-1 accuracy from metric object
-        metric = self.metrics.get_value_op('top_1_accuracy')
+        self.sess.run([self.data_ops['train']])
+
         training_hist = []
 
         for i in range(cycles):
@@ -161,7 +161,7 @@ class SmallResNet(AbstractNetwork):
             If aggregated is True the metrics are aggregated overall cycles
             -> For testing and validation the same actions are needed, only difference is the dataset
             -> summary writing only when aggregated=False"""
-        self.sess.run([self.init_ops['validation']])
+        self.sess.run([self.data_ops['validation']])
         self.inference_type = self.InferenceType.VALIDATION
         # _metrics_run processes the validation it self
         return self._metrics_run(number_of_batches, aggregated, write_summary)
@@ -171,15 +171,29 @@ class SmallResNet(AbstractNetwork):
             If aggregated is True the metrics are aggregated overall cycles
             -> For testing and validation the same actions are needed, only difference is the dataset
             -> summary writing only when aggregated=False"""
-        self.sess.run([self.init_ops['test']])
+        self.sess.run([self.data_ops['test']])
         self.inference_type = self.InferenceType.TEST
         # _metrics_run processes the testing it self
         return self._metrics_run(number_of_batches, aggregated, write_summary)
 
+    def predict(self, file_list):
+        """Predicts classes for images given as filenames/path
+            returns: dict with filename and predictions"""
+        # dataset is constructed from placeholder that gets filled with file_list
+        placeholder = tf.get_default_graph().get_tensor_by_name('prediction_input:0')
+        self.sess.run([self.data_ops['prediction']], feed_dict={placeholder: file_list})
+        result = []
+
+        for file_name in file_list:
+            prediction = self.sess.run([self.softmax], feed_dict={self.training: False})
+            result.append({'file_name': file_name, 'prediction': prediction})
+
+        return result
+
     def _metrics_run(self, number_of_batches, aggregated, write_summary):
         """triggers metrics run
             -> summary writing only when aggregated=False"""
-        metric_ops_dict = self.metrics  # run all available metrics for test/validation
+
         if aggregated:
             # metrics run with results aggregated overall batches
             if write_summary:
@@ -200,8 +214,8 @@ class SmallResNet(AbstractNetwork):
                                              feed_dict={self.training: False})
 
             result_dict = {}
-            for i, key in enumerate(self.metrics.names):
-                result_dict[key] = results[i]
+            for j, key in enumerate(self.metrics.names):
+                result_dict[key] = results[j]
             result_list.append(result_dict)
 
             if write_summary:
@@ -260,25 +274,50 @@ class Metrics:
 
 
 def testing_2():
-    model = SmallResNet(batch_size=10)
+    model = ImageClassifier(batch_size=10)
     results_single = model.validate(number_of_batches=2, aggregated=False)
     results_aggregated = model.validate(number_of_batches=2, aggregated=True)
     print(results_single)
     print(results_aggregated)
 
 
-def testing():
-    time_1 = time.time()
-    model = SmallResNet(batch_size=10)
-    time_2 = time.time()
-    train_accuracy = model.train(cycles=5)
-    print(train_accuracy)
-    print("Overall time:", time.time() - time_1)
-    print("Cycle time:", time.time() - time_2)
+def test_both():
+    g1 = tf.Graph()
+    with g1.as_default():
+        with ImageClassifier(batch_size=10) as model_small:
+            test_model(model_small)
+    g2 = tf.Graph()
+    with g2.as_default():
+        with ImageClassifier(model_type=ModelType.TRAINED_MODEL, batch_size=20) as model_trained:
+            test_model(model_trained)
 
 
-# todo image test ? -> image summary writer
+def test_model(model):
+    time_train = time.time()
+    train_acc = model.train(cycles=5)
+    time_valid = time.time()
+    val_acc = model.validate(number_of_batches=1)
+    time_test = time.time()
+    test_acc = model.test(number_of_batches=1)
+    time_pred = time.time()
+    files = ['C:/Users/D065030/Documents/dev/Studienarbeit/OpenImagesClassifier/OpenImagesClassifier'
+             '/data/Images/Car/train/000cfa102510c0f1.jpg',
+             'C:/Users/D065030/Documents/dev/Studienarbeit/OpenImagesClassifier/OpenImagesClassifier'
+             '/data/Images/Car/train/000efa99e67d6f0c.jpg']
+    predictions = model.predict(files)
+    time_end = time.time()
+    print('Train:', train_acc)
+    print('Valid:', val_acc)
+    print('Test:', test_acc)
+    print('Pred:', predictions)
+    print("-Times-------------")
+    print('Train:', time_valid - time_train)
+    print('Valid:', time_test - time_valid)
+    print('Test:', time_pred - time_valid)
+    print('Pred:', time_end - time_pred)
+    print('Overall', time_end - time_train)
+    print("-------------------------------------")
 
 
 if __name__ == '__main__':
-    testing()
+    test_both()
