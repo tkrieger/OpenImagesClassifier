@@ -28,7 +28,8 @@ def preprocess_image(filename, image_id, label, label_display, label_class):
     """Reads image and scales down to 256x256. As mapping function for tf.data.Dataset used."""
     image_encoded = tf.read_file(filename)
     image = tf.image.decode_jpeg(image_encoded)
-    image = tf.cond(tf.size(image) < 3*256*256, lambda: tf.image.grayscale_to_rgb(image), lambda: image)
+    image = tf.cond(tf.size(image) < 3 * 256 * 256, lambda: tf.image.grayscale_to_rgb(image),
+                    lambda: tf.identity(image))
     image_resized = tf.image.resize_images(image, [256, 256], align_corners=True)
     # for performance during training it would be great to save the image as float32,
     # but this increases the dataset size 4 times!
@@ -39,7 +40,8 @@ def preprocess_image(filename, image_id, label, label_display, label_class):
 def load_and_scale_image_ops(filename_placeholder):
     image_encoded = tf.read_file(filename_placeholder)
     image = tf.image.decode_jpeg(image_encoded)
-    image = tf.cond(tf.size(image) < 3 * 256 * 256, lambda: tf.image.grayscale_to_rgb(image), lambda: image)
+    image = tf.cond(tf.size(image) < 3 * 256 * 256, lambda: tf.image.grayscale_to_rgb(image),
+                    lambda: tf.identity(image))
     image = tf.image.convert_image_dtype(image, tf.float32)
     image_resized = tf.image.resize_images(image, [224, 224], align_corners=True)
     return tf.reshape(image_resized, shape=[1, 224, 224, 3])
@@ -61,7 +63,7 @@ def preprocess(subset):
                               INNER JOIN Dict D ON L.LabelName = D.LabelName 
                               WHERE Subset = ?
                               ORDER BY random()
-                              LIMIT 512""", (subset,))
+                              """, (subset,))
 
         # list of paths for all images in train dataset
         df = pd.DataFrame(result.fetchall(), columns=['ImageID', 'Path', 'Label', 'Display_Label', 'LabelClass'])
@@ -172,8 +174,27 @@ def parse_test(image, metadata):
 def parse_train(image, metadata):
     """Map function for data augmentation"""
     image = tf.image.convert_image_dtype(image, tf.float32)
-    image = tf.image.resize_images(image, [224, 224], align_corners=True)
-    # todo data augmentation
+    # flipping random
+    image = tf.image.random_flip_left_right(image)
+    image = tf.image.random_flip_up_down(image)
+    # cropping random
+    rand_crop = tf.random_uniform([], minval=0, maxval=1, dtype=tf.float32)
+    image = tf.cond(rand_crop > 0.5, lambda: tf.random_crop(image, [224, 224, 3]),
+                    lambda: tf.image.resize_images(image, [224, 224], align_corners=True))
+    # rotating image
+    random_int = tf.random_uniform([], minval=0, maxval=4, dtype=tf.int32)
+    image = tf.image.rot90(image, k=random_int)
+    # saturation
+    rand_saturation = tf.cast(tf.random_uniform([], minval=0, maxval=2, dtype=tf.int32), tf.bool)
+    image = tf.cond(rand_saturation, lambda: tf.image.random_saturation(image, 0.2, 1.8),
+                    lambda: tf.identity(image))
+    # contrast
+    rand_contrast = tf.cast(tf.random_uniform([], minval=0, maxval=2, dtype=tf.int32), tf.bool)
+    image = tf.cond(rand_contrast, lambda: tf.image.random_contrast(image, 0.25, 0.8),
+                    lambda: tf.identity(image))
+    # hue
+    rand_hue = tf.cast(tf.random_uniform([], minval=0, maxval=2, dtype=tf.int32), tf.bool)
+    image = tf.cond(rand_hue, lambda: tf.image.random_hue(image, 0.1), lambda: tf.identity(image))
     return image, metadata
 
 

@@ -77,14 +77,15 @@ def fill_dict(conn, table_name):
 
 def build_database():
     """Insert downloaded CSV into sqlite database for further selection of categories"""
-    if not os.path.exists(config.DATABASE['filename']):
-        print("Creates sqlite database for downloaded csv data")
-        with sqlite3.connect(config.DATABASE['filename']) as conn:
-            create_tables(conn)
-            fill_table(conn, 'Images')
-            fill_table(conn, 'Labels')
-            fill_dict(conn, 'Dict')
-            conn.commit()
+    if os.path.exists(config.DATABASE['filename']):
+        os.remove(config.DATABASE['filename'])
+    print("Creates sqlite database for downloaded csv data")
+    with sqlite3.connect(config.DATABASE['filename']) as conn:
+        create_tables(conn)
+        fill_table(conn, 'Images')
+        fill_table(conn, 'Labels')
+        fill_dict(conn, 'Dict')
+        conn.commit()
 
 
 def download_files():
@@ -254,6 +255,7 @@ def add_paths_to_table():
                 c.execute("""UPDATE Images SET PathJPEG = ? WHERE ImageID = ?""", (abs_path, row[0]))
 
         c.execute("""DELETE FROM Images WHERE PathJPEG IS NULL""")
+        c.execute("""DELETE FROM Labels WHERE ImageID NOT IN (SELECT ImageID FROM Images)""")
         conn.commit()
 
 
@@ -279,5 +281,5 @@ def setup():
 
 
 if __name__ == '__main__':
-
+    setup()
 
