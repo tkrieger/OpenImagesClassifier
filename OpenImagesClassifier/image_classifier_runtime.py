@@ -110,7 +110,7 @@ class ImageClassifier:
         input_ops, self.handle, self.iterator_handle_strings = data.build_datasets_and_iterators(batch_size, self.sess)
         self.X = tf.placeholder_with_default(input_ops[0], shape=[None, 224, 224, 3], name="X_input")
         self.y = tf.placeholder_with_default(input_ops[1][3], shape=[None], name="y_label")
-        tf.summary.image("train", self.X)
+        # tf.summary.image("train", self.X)
 
         self.prediction_filename_placeholder = tf.placeholder(tf.string, shape=(), name="prediction_filename")
         self.scale_image = data.load_and_scale_image_ops(self.prediction_filename_placeholder)
@@ -245,7 +245,7 @@ class ImageClassifier:
         for i, key in enumerate(self.metrics.names):
             result_dict[key] = results[i]
 
-        return result_dict
+        return [result_dict]
 
 
 class Metrics:

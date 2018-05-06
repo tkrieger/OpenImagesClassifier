@@ -24,6 +24,7 @@ import os
 import threading
 import sqlite3
 import time
+import datetime
 
 
 class SetupState(Enum):
@@ -35,6 +36,7 @@ class SetupState(Enum):
 class ModelWrapper:
     def __init__(self, model_type=runtime.ModelType.SMALL_RESNET, batch_size=256):
         self.graph = tf.Graph()
+        self.model_type = model_type
         with self.graph.as_default():
             self.model = runtime.ImageClassifier(model_type, batch_size)
 
@@ -91,20 +93,20 @@ class Controller(tk.Frame):
         # training panel
         tk.Label(self, text="Training").grid(row=4, columnspan=3)
         self.panels = []
-        panel = ActionPanel(master=self, action=self._run_train, name='Train')
+        panel = ActionPanel(master=self, action=self._run_train, controller=self, name='Train')
         panel.grid(row=5, columnspan=3)
         self.panels.append(panel)
 
         # validation panel
         tk.Label(self, text="Validation").grid(row=6, columnspan=3)
-        panel = ActionPanel(master=self, action=self._run_validation,
+        panel = ActionPanel(master=self, action=self._run_validation, controller=self,
                             name='Validation', bool_option_name="Aggregated results")
         panel.grid(row=7, columnspan=3)
         self.panels.append(panel)
 
         # testing panel
         tk.Label(self, text="Testing").grid(row=8, columnspan=3)
-        panel = ActionPanel(master=self, action=self._run_test,
+        panel = ActionPanel(master=self, action=self._run_test, controller=self,
                             name='Test', bool_option_name="Aggregated results")
         panel.grid(row=9, columnspan=3)
         self.panels.append(panel)
@@ -115,8 +117,13 @@ class Controller(tk.Frame):
         panel.grid(row=11, columnspan=3)
         self.panels.append(panel)
 
+        # self.result_controller = result_controller
+        # self.result_history = self.result_controller.result_history
+        self.result_history = ResultHistory(self)
+
         self._disable_action()
         self._propagate_batch_size()
+        self._should_stop_action = False
 
     def _setup_models(self):
         if self._ready_to_run:
@@ -129,6 +136,9 @@ class Controller(tk.Frame):
             self.current_model = self.small_resnet
         else:
             self.current_model = self.trained_network
+
+    def stop_action(self):
+        self._should_stop_action = True
 
     def completed_process(self):
         self._process_active = False
@@ -153,16 +163,22 @@ class Controller(tk.Frame):
     def _run_train(self, cycles, caller, early_stop=False):
         self._disable_action()
         if not self._process_active:
+            self.result_history.reset_training_results()
             t = threading.Thread(target=self._thread_train, args=(cycles, caller, early_stop))
             t.start()
             self._process_activated()
 
     def _thread_train(self, cycles, caller, early_stop):
+        caller.is_stoppable()
         for i in range(0, cycles, 10):
+            if self._should_stop_action:
+                break
             cycles_now = min(10, cycles - i)
             result = self.current_model.train(cycles_now)
             caller.update_progress(cycles_now)
-            # todo result mgm
+
+            self.result_history.add_training_result(result)
+
             if early_stop:
                 if self.should_stop_early(result):
                     break
@@ -176,6 +192,7 @@ class Controller(tk.Frame):
     def _run_validation(self, cycles, caller, aggregated=False):
         self._disable_action()
         if not self._process_active:
+            self.result_history.reset_validation_results()
             t = threading.Thread(target=self._thread_validation, args=(cycles, caller, aggregated))
             t.start()
             self._process_activated()
@@ -184,13 +201,16 @@ class Controller(tk.Frame):
         if aggregated:
             caller.progress_unknown()
             result = self.current_model.validate(number_of_batches=cycles, aggregated=True)
-            # todo result mgm
+            self.result_history.add_validation_results(result)
         else:
+            caller.is_stoppable()
             for i in range(0, cycles, 10):
+                if self._should_stop_action:
+                    break
                 cycles_now = min(10, cycles - i)
                 result = self.current_model.validate(cycles_now, aggregated=False)
                 caller.update_progress(cycles_now)
-                # todo result mgm
+                self.result_history.add_validation_results(result)
 
         caller.completed_process()
         self.completed_process()
@@ -198,6 +218,7 @@ class Controller(tk.Frame):
     def _run_test(self, cycles, caller, aggregated=False):
         self._disable_action()
         if not self._process_active:
+            self.result_history.reset_test_results()
             t = threading.Thread(target=self._thread_test, args=(cycles, caller, aggregated))
             t.start()
             self._process_activated()
@@ -206,13 +227,16 @@ class Controller(tk.Frame):
         if aggregated:
             caller.progress_unknown()
             result = self.current_model.validate(number_of_batches=cycles, aggregated=True)
-            # todo result mgm
+            self.result_history.add_test_results(result)
         else:
+            caller.is_stoppable()
             for i in range(0, cycles, 10):
+                if self._should_stop_action:
+                    break
                 cycles_now = min(10, cycles - i)
                 result = self.current_model.validate(cycles_now, aggregated=False)
                 caller.update_progress(cycles_now)
-                # todo result mgm
+                self.result_history.add_test_results(result)
 
         caller.completed_process()
         self.completed_process()
@@ -259,6 +283,59 @@ class Controller(tk.Frame):
         return self._ready_to_run
 
 
+class ResultController(tk.Frame):
+    def __init__(self, master):
+        super(ResultController, self).__init__(master)
+        self.result_history = ResultHistory()
+
+
+class ResultHistory:
+    def __init__(self, controller):
+        self.controller = controller
+        self.train_results = {'small_resnet': {'training': [], 'validation': []},
+                              'trained_model': {'training': [], 'validation': []}}
+        self.validation_results = {'small_resnet': [], 'trained_model': []}
+        self.test_results = {'small_resnet': [], 'trained_model': []}
+
+    def _get_model_key(self):
+        if self.controller.current_model.model_type == runtime.ModelType.SMALL_RESNET:
+            return 'small_resnet'
+        if self.controller.current_model.model_type == runtime.ModelType.TRAINED_MODEL:
+            return 'trained_model'
+
+    def add_training_result(self, result):
+        model_key = self._get_model_key()
+        self.train_results[model_key]['training'].extend(result['training'])
+        self.train_results[model_key]['validation'].append(result['validation'])
+
+    def reset_training_results(self):
+        model_key = self._get_model_key()
+        self.train_results[model_key] = {'training': [], 'validation': []}
+
+    def add_validation_results(self, results):
+        model_key = self._get_model_key()
+        self.validation_results[model_key].extend(results)
+
+    def reset_validation_results(self):
+        model_key = self._get_model_key()
+        self.validation_results[model_key] = []
+
+    def add_test_results(self, results):
+        model_key = self._get_model_key()
+        self.test_results[model_key].extend(results)
+
+    def reset_test_results(self):
+        model_key = self._get_model_key()
+        self.test_results[model_key] = []
+
+
+class ResultPane(tk.Frame):
+    def __init__(self, master, result_manager):
+        super(ResultPane, self).__init__(master)
+        self.result_manager = result_manager
+
+
+
 class Panel(tk.Frame):
     def __init__(self, master):
         super(Panel, self).__init__(master)
@@ -280,6 +357,9 @@ class Panel(tk.Frame):
         return
 
     def set_batch_size(self, size):
+        return
+
+    def is_stoppable(self):
         return
 
 
@@ -334,6 +414,8 @@ class PredictionPanel(Panel):
             axis.set_yticklabels(names)
             axis.invert_yaxis()
             axis.set_xlabel('Prediction')
+            for i, v in enumerate(x):
+                axis.text(v + 3, i, " "+str(v), va='center', color='black', fontweight='bold')
             fig.tight_layout()
             canvas = FigureCanvasTkAgg(fig, master=self)
             canvas.show()
@@ -352,11 +434,12 @@ class PredictionPanel(Panel):
 
 
 class ActionPanel(Panel):
-    def __init__(self, action, master, name='Train', bool_option_name='Early Stopping'):
+    def __init__(self, action, master, controller, name='Train', bool_option_name='Early Stopping'):
         super(ActionPanel, self).__init__(master)
         self.overall_steps = 0
         self.current_step = 0
         self.action = action
+        self.controller = controller
 
         self.configure(bd='2', relief='groove', padx=4, pady=4)
 
@@ -372,44 +455,74 @@ class ActionPanel(Panel):
         sv.trace("w", lambda x, y, z, sv=sv: self._update_image_count(sv))
         self.cycles_entry.insert(0, "10")
 
-        self.train_button = tk.Button(self, text=name, command=self._run_training, width=15)
-        self.train_button.grid(column=4, row=0, rowspan=2, sticky="E")
+        self.train_button = tk.Button(self, text=name, command=self._run_process, width=15)
+        self.train_button.grid(column=4, row=0, sticky="E")
+
+        self.stop_button = tk.Button(self, text='Stop', command=self._stop(), state='disabled')
+        self.stop_button.grid(column=4, row=1, sticky="E")
 
         self.bool_var = tk.IntVar()
         self.bool_flag = tk.Checkbutton(self, text=bool_option_name, var=self.bool_var)
         self.bool_flag.deselect()
         self.bool_flag.grid(column=2, columnspan=2, row=1)
 
-        lbl_step_txt = tk.Label(self, text="Step")
+        lbl_step_txt = tk.Label(self, text="Batch:")
         lbl_step_txt.grid(column=0, row=2, sticky="W")
         self.label_step = tk.Label(self, text="0/0", width=10)
         self.label_step.grid(column=1, row=2)
         self.progress_bar = ttk.Progressbar(self, orient="horizontal", length=300, mode='determinate')
-        self.progress_bar.grid(row=2, column=2, columnspan=3, pady=4)
+        self.progress_bar.grid(row=2, column=2, columnspan=3, rowspan=2, pady=4)
+
+        tk.Label(self, text='Duration:').grid(row=3, column=0)
+
+        self.duration_label = tk.Label(self)
+        self.duration_label.grid(row=3, column=1)
+
+        self.start_time = None
+        self._in_action = False
 
     def _update_image_count(self, sv):
         if sv.get() != '':
             self.overall_steps = int(sv.get())
             self.calc_label.configure(text='= {} Images'.format((self.overall_steps * self.batch_size)))
 
+    def _stop(self):
+        self.controller.stop_action()
+
     def disable_control(self):
         self.train_button.configure(state='disabled')
         self.cycles_entry.configure(state='disabled')
         self.bool_flag.configure(state='disabled')
+        self.stop_button.configure(state='disabled')
 
     def enable_control(self):
         self.train_button.configure(state='normal')
         self.cycles_entry.configure(state='normal')
         self.bool_flag.configure(state='normal')
+        self.stop_button.configure(state='disabled')
 
-    def _run_training(self):
+    def is_stoppable(self):
+        self.stop_button.configure(state='normal')
+
+    def _run_process(self):
         self.current_step = 0
         self.progress_bar.stop()
         self.progress_bar.configure(maximum=self.overall_steps, value=self.current_step, mode='determinate')
         self.label_step.configure(text="{}/{}".format(self.current_step, self.overall_steps))
+        self.start_time = datetime.datetime.now()
+        self._in_action = True
+        self.time_thread = threading.Thread(target=self._time_upd)
+        self.time_thread.start()
 
         bool_flag = bool(self.bool_var.get())
         self.action(self.overall_steps, self, bool_flag)
+
+    def _time_upd(self):
+        while True:
+            if not self._in_action:
+                break
+            self.duration_label.configure(text=str(datetime.datetime.now() - self.start_time).split('.', 2)[0])
+            time.sleep(1)
 
     def update_progress(self, steps):
         self.current_step = self.current_step + steps
@@ -420,6 +533,7 @@ class ActionPanel(Panel):
         self.progress_bar.stop()
         self.progress_bar.configure(maximum=self.overall_steps, value=self.overall_steps, mode='determinate')
         self.current_step = 0
+        self._in_action = False
 
     def set_batch_size(self, size):
         self.batch_size = size
@@ -496,7 +610,7 @@ class StatusFrame(tk.Frame):
             self.state_label_tfrecods.configure(text="(Ready)", bg="green", fg="white")
 
     def _update_dataset_meta(self):
-        if self._check_setup_state() == SetupState.DATA_FETCHED or SetupState.READY_FOR_TRAIN:
+        if self._check_setup_state() != SetupState.NONE:
             with sqlite3.connect(config.DATABASE['filename']) as conn:
                 c = conn.cursor()
                 result = c.execute("SELECT count(*) FROM Images")
@@ -555,7 +669,11 @@ def on_closing():
         root.destroy()
 
 
-if __name__ == '__main__':
+root = None
+
+
+def main():
+    global root
     root = tk.Tk()
     root.title("Open Images Classifier")
     root.protocol("WM_DELETE_WINDOW", on_closing)
@@ -563,3 +681,7 @@ if __name__ == '__main__':
     app.pack()
     app.mainloop()
     os._exit(0)
+
+
+if __name__ == '__main__':
+    main()

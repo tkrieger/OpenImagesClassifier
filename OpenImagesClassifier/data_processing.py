@@ -27,24 +27,25 @@ def _bytes_feature(value):
 def preprocess_image(filename, image_id, label, label_display, label_class):
     """Reads image and scales down to 256x256. As mapping function for tf.data.Dataset used."""
     image_encoded = tf.read_file(filename)
-    image = tf.image.decode_jpeg(image_encoded)
-    image = tf.cond(tf.size(image) < 3 * 256 * 256, lambda: tf.image.grayscale_to_rgb(image),
-                    lambda: tf.identity(image))
-    image_resized = tf.image.resize_images(image, [256, 256], align_corners=True)
+    image_decoded = tf.image.decode_jpeg(image_encoded)
+    image_resized = tf.image.resize_images(image_decoded, [256, 256], align_corners=True)
+    image_color = tf.cond(tf.size(image_resized) < 3 * 256 * 256, lambda: tf.image.grayscale_to_rgb(image_resized),
+                    lambda: tf.identity(image_resized))
     # for performance during training it would be great to save the image as float32,
     # but this increases the dataset size 4 times!
-    image = tf.cast(image_resized, dtype=tf.uint8)
+    image = tf.cast(image_color, dtype=tf.uint8)
     return image, (image_id, label, label_display, label_class)
 
 
 def load_and_scale_image_ops(filename_placeholder):
     image_encoded = tf.read_file(filename_placeholder)
     image = tf.image.decode_jpeg(image_encoded)
-    image = tf.cond(tf.size(image) < 3 * 256 * 256, lambda: tf.image.grayscale_to_rgb(image),
-                    lambda: tf.identity(image))
+
     image = tf.image.convert_image_dtype(image, tf.float32)
     image_resized = tf.image.resize_images(image, [224, 224], align_corners=True)
-    return tf.reshape(image_resized, shape=[1, 224, 224, 3])
+    image_color = tf.cond(tf.size(image_resized) < 3 * 224 * 224, lambda: tf.image.grayscale_to_rgb(image_resized),
+                    lambda: tf.identity(image_resized))
+    return tf.reshape(image_color, shape=[1, 224, 224, 3])
 
 def preprocess(subset):
     """Reads all jpeg images, scales them down to 256 x 256 and saves them to one .tfrecords file.
@@ -160,6 +161,7 @@ def parse_record(record):
     parsed = tf.parse_single_example(record, dictionary)
     image = tf.decode_raw(parsed['data'], tf.uint8)
     image = tf.reshape(image, (256, 256, 3))
+
     return image, (parsed['ImageID'], parsed['Label'], parsed['Display_Label'], parsed['Label_Class'])
 
 
@@ -216,7 +218,7 @@ def build_dataset(subset, batch_size):
     else:
         dataset = dataset.map(parse_test)
 
-    dataset = dataset.shuffle(buffer_size=2000) \
+    dataset = dataset.shuffle(buffer_size=5000) \
         .batch(batch_size) \
         .repeat()
     return dataset
