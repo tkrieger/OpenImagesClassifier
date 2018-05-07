@@ -92,7 +92,9 @@ class ImageClassifier:
         loss = tf.reduce_mean(cross_entropy)
         tf.summary.scalar('loss', loss)
         optimizer = tf.train.AdamOptimizer()
-        self.training_op = optimizer.minimize(loss)
+        extra_update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+        with tf.control_dependencies(extra_update_ops):
+            self.training_op = optimizer.minimize(loss)
 
     def _init_basics(self, batch_size, model_path, model_type):
         """Initializes all object attributes that represent basic object state"""

@@ -15,7 +15,9 @@ def batch_norm(input, training):
         input: previous op/tensor
         training: Indicator for usage while training"""
     # epsilon use default
-    return tf.layers.batch_normalization(input, training=training, momentum=BATCH_NORMALIZATION_MOMENTUM, fused=True)
+    return tf.layers.batch_normalization(input, training=training,
+                                         momentum=BATCH_NORMALIZATION_MOMENTUM, fused=True,
+                                         center=True, scale=True,)
 
 
 def residual_unit(input, filters_num, kernel_size, training, name):

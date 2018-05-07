@@ -44,11 +44,11 @@ class ModelWrapper:
         with self.graph.as_default():
             return self.model.train(cycles)
 
-    def validate(self, number_of_batches=1, aggregated=True, write_summary=False):
+    def validate(self, number_of_batches=1, aggregated=True, write_summary=True):
         with self.graph.as_default():
             return self.model.validate(number_of_batches, aggregated, write_summary)
 
-    def test(self, number_of_batches=1, aggregated=True, write_summary=False):
+    def test(self, number_of_batches=1, aggregated=True, write_summary=True):
         with self.graph.as_default():
             return self.model.test(number_of_batches, aggregated, write_summary)
 
@@ -142,6 +142,7 @@ class Controller(tk.Frame):
 
     def completed_process(self):
         self._process_active = False
+        self._should_stop_action = False
         self.enable_action()
 
     def _apply_batch_size(self):
@@ -226,7 +227,7 @@ class Controller(tk.Frame):
     def _thread_test(self, cycles, caller, aggregated):
         if aggregated:
             caller.progress_unknown()
-            result = self.current_model.validate(number_of_batches=cycles, aggregated=True)
+            result = self.current_model.test(number_of_batches=cycles, aggregated=True)
             self.result_history.add_test_results(result)
         else:
             caller.is_stoppable()
@@ -234,7 +235,7 @@ class Controller(tk.Frame):
                 if self._should_stop_action:
                     break
                 cycles_now = min(10, cycles - i)
-                result = self.current_model.validate(cycles_now, aggregated=False)
+                result = self.current_model.test(cycles_now, aggregated=False)
                 caller.update_progress(cycles_now)
                 self.result_history.add_test_results(result)
 
@@ -458,7 +459,7 @@ class ActionPanel(Panel):
         self.train_button = tk.Button(self, text=name, command=self._run_process, width=15)
         self.train_button.grid(column=4, row=0, sticky="E")
 
-        self.stop_button = tk.Button(self, text='Stop', command=self._stop(), state='disabled')
+        self.stop_button = tk.Button(self, text='Stop', command=self._stop, state='disabled')
         self.stop_button.grid(column=4, row=1, sticky="E")
 
         self.bool_var = tk.IntVar()
