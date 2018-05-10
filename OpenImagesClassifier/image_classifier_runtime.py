@@ -99,6 +99,7 @@ class ImageClassifier:
     def _init_basics(self, batch_size, model_path, model_type):
         """Initializes all object attributes that represent basic object state"""
         self.sess = tf.Session()
+
         with tf.variable_scope("counter", reuse=tf.AUTO_REUSE):
             self.counter = tf.get_variable('overall_training_cycles', shape=(), dtype=tf.int32,
                                            trainable=False, initializer=tf.constant_initializer(0))
