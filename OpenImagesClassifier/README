@@ -1,0 +1,11 @@
+OpenImagesClassifier
+--------------------------
+Zum Ausführen sind die innerhalb der requirements.txt Datei spezifizierten Packages notwendig.
+Falls nicht vorhanden (ggf. in VirtualEnv ausführen):
+
+pip3 install -r requirements.txt
+(bzw. einfach nur pip, sofern nur Python3 installiert ist)
+
+Zum Ausführen der Anwendung im Parentverzeichnis folgendes ausführen:
+
+python -m OpenImagesClassifier
