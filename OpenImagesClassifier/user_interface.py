@@ -324,6 +324,7 @@ class ResultHistory:
     def add_test_results(self, results):
         model_key = self._get_model_key()
         self.test_results[model_key].extend(results)
+        print(results)
 
     def reset_test_results(self):
         model_key = self._get_model_key()
@@ -334,7 +335,6 @@ class ResultPane(tk.Frame):
     def __init__(self, master, result_manager):
         super(ResultPane, self).__init__(master)
         self.result_manager = result_manager
-
 
 
 class Panel(tk.Frame):

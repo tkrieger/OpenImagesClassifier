@@ -12,6 +12,7 @@ from enum import Enum
 import tensorflow as tf
 import tensorflow_hub as hub
 import time
+import numpy as np
 
 
 class ModelType(Enum):
@@ -67,6 +68,9 @@ class ImageClassifier:
                                    values=tf.nn.in_top_k(self.logits, self.y, k=3))
         self.metrics.append_metric('top_5_accuracy', tf.metrics.mean,
                                    values=tf.nn.in_top_k(self.logits, self.y, k=5))
+
+        self.confusion_matrix = tf.confusion_matrix(labels=self.y, predictions=tf.argmax(self.logits, axis=1),
+                                                    num_classes=len(config.CATEGORIES))
 
     def _init_runtime(self, summary_dir):
         """get model ready for runtime"""
@@ -204,9 +208,7 @@ class ImageClassifier:
             -> summary writing only when aggregated=False"""
         if aggregated:
             # metrics run with results aggregated overall batches
-            if write_summary:
-                print('Warning: writing summary only with aggregated = False possible!')
-            return self._metrics_run_overall(number_of_batches)
+            return self._metrics_run_overall(number_of_batches, write_summary)
         # metrics run with results for each batch
         return self._metrics_run_batch(number_of_batches, write_summary)
 
@@ -218,10 +220,10 @@ class ImageClassifier:
             # reset metrics for every run
             self.sess.run(self.metrics.reset)
             # update metrics => run network to predict
-            results, summary = self.sess.run([self.metrics.update_ops, self.merged_summaries],
+            results, summary, c_matrix = self.sess.run([self.metrics.update_ops, self.merged_summaries, self.confusion_matrix],
                                              feed_dict={self.training: False, self.handle: self.current_handle_string})
 
-            result_dict = {}
+            result_dict = {'confusion_matrix': c_matrix}
             for j, key in enumerate(self.metrics.names):
                 result_dict[key] = results[j]
             result_list.append(result_dict)
@@ -232,19 +234,28 @@ class ImageClassifier:
         summary_writer.flush()
         return result_list
 
-    def _metrics_run_overall(self, number_of_batches):
+    def _metrics_run_overall(self, number_of_batches, write_summary):
         """Processes metrics run, with aggregated results overall batches"""
         # reset metrics once for running batches
         self.sess.run(self.metrics.reset)
-
+        summary_writer = self.test_writer if self.inference_type == self.InferenceType.TEST else self.validation_writer
+        class_count = len(config.CATEGORIES)
+        agg_c_matrix = np.zeros(shape=[class_count, class_count], dtype=np.int32)
         for i in range(number_of_batches):
             # run metric updates -> run network to predict
-            self.sess.run(self.metrics.update_ops, feed_dict={self.training: False,
-                                                              self.handle: self.current_handle_string})
+            _, c_matrix, summary = self.sess.run([self.metrics.update_ops,
+                                                         self.confusion_matrix,
+                                                         self.merged_summaries],
+                                        feed_dict={self.training: False,
+                                        self.handle: self.current_handle_string})
+            agg_c_matrix = np.asarray(c_matrix) + agg_c_matrix
+            if write_summary:
+                summary_writer.add_summary(summary, global_step=self.counter.eval(session=self.sess))
 
+        summary_writer.flush()
         # get results from metrics once
         results = self.sess.run(self.metrics.value_ops)
-        result_dict = {}
+        result_dict = {'confusion_matrix': agg_c_matrix}
         for i, key in enumerate(self.metrics.names):
             result_dict[key] = results[i]
 
